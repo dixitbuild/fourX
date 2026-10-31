@@ -10,4 +10,21 @@ wheels/
 .venv
 
 #internal plan
-FourX_Agent_Implementation_Plan.md
+# FourX_Agent_Implementation_Plan.md
+
+# Local credentials and workflow state
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-shm
+*.db-wal
+*.lock
+!uv.lock
+.pytest_cache/
+
+# OS files, extracted archives and agent process lock
+.DS_Store
+.fourx.lock
+fourx-take-home.zip
