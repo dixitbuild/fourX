@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+#internal plan
+FourX_Agent_Implementation_Plan.md
