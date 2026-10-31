@@ -2,10 +2,11 @@
 
 ## Current stage
 
-Milestone 1 is implemented: read-only data tools, their JSON tool definitions,
-canonical message/action contracts, an inspection CLI and isolated tests. The full
-agent loop, persistence and posting are not implemented yet. Installed dependencies,
-`.venv`, `pyproject.toml` and `uv.lock` remain unchanged.
+The agent is built in a trimmed form (see "Scope decisions"): read tools, SQLite
+conversations, the Gemini/Groq/OpenAI loop, approval, `switch model` command, stop and posting
+recovery. `python agent.py --conversation NAME` opens the chat; the inspection
+commands (`fourx invoices`, `fourx ledger all`, ...) still work without API keys.
+Acceptance runs against live providers are recorded in the README, not here.
 
 The authoritative requirements and original inputs are in:
 
@@ -16,6 +17,32 @@ The authoritative requirements and original inputs are in:
 
 Build one milestone at a time. Check off a milestone only after its behavior has
 been demonstrated. Do not treat the old prototype or its tests as completed work.
+
+## Scope decisions (supersede the detailed sections below where they differ)
+
+The brief says to keep it small and to explain every line, so the build is trimmed:
+
+- Plain `input()`; the agent runs on a worker thread and Ctrl-C asks it to stop. No
+  `prompt-toolkit`, no `/cancel`, no asyncio.
+- The model sees two tools: `read(source, mode, id, filters)` over invoices, vendors and the
+  ledger (single/filter/all) and `post(invoice_id)`. `switch_model(model)` is defined but run only
+  by the program, never offered to the model. Typing exactly `switch model` makes the CLI ask
+  `gemini, groq or openai?` and compare the answer, so a model out of quota cannot block a switch.
+  Local Python tools, not an MCP server. `/model` is gone. Default provider is OpenAI.
+- Conversations are chosen with `--conversation NAME`. No `/finish`, `/new`, latest-open
+  auto-selection, or separate conversation/workflow status fields.
+- Ctrl-C never cancels a waiting approval; only `/approve` or `/decline` ends it. A
+  normal message typed while an approval waits re-shows the approval.
+- Duplicates are judged by the real ledger only. Saved posting attempts are used only
+  to recover an interrupted post, so `python ledger.py reset` cannot wrongly block a rerun.
+- The lock (`ledger.lock`, beside the ledger) is held only around the final re-check
+  and post, so two terminals cannot both pass the duplicate check.
+- Python >= 3.11. The conversation DB is `data/fourx.db`; old `data/` files are unused.
+- Model 429/5xx/timeouts are retried with a wait that Ctrl-C can interrupt.
+- `FOURX_TOOL_DELAY` (seconds) slows each read tool so scenario 5 can be stopped.
+- Gemini history keeps the raw parts (with thought signatures) for Gemini's own turns.
+  Calls from another provider are sent with Google's documented placeholder signature.
+  Verify this live (scenario 4) before relying on it.
 
 ## 1. Required behavior
 
@@ -37,113 +64,124 @@ or invent invoice fields, account mappings, or tax rules.
 
 ## 2. End-to-end flow
 
+These diagrams show the trimmed build (see "Scope decisions"). Sections 3 onward are the
+original design notes; where they differ from the diagrams or the decisions above, the
+diagrams and decisions win.
+
 ### Simple flow overview
 
-![Simple agent flow diagram](mermaid-diagram.png)
+```mermaid
+flowchart LR
+    Clerk([Clerk]) --> CLI[CLI: input prompt]
+    CLI -->|"switch model"| Switch["Program asks: gemini, groq or openai?<br/>compares the answer in code, no LLM call"]
+    Switch --> Store
+    CLI -->|any other text| Runner[Runner: the agent loop]
+    Runner <-->|history + read and post tools| Model{{Gemini / Groq / OpenAI}}
+    Runner -->|read| Data[(invoices, vendors.json, ledger reads)]
+    Runner -->|post: checks, then human approval| Ledger[(ledger.db via ledger.post)]
+    Runner <-->|save before moving on| Store[(data/fourx.db)]
+```
 
-The **CLI** accepts human input, the **runner** controls the workflow, and the
-**model** chooses tools or writes an answer. Every box marked **Save** writes to
-the conversation SQLite database before the runner advances. Accounting entries
-are written only through the supplied `ledger.py`.
+The model only asks for `read` or `post`. Code runs the tools, builds every proposal from the
+files on disk, and changes the model only when the clerk types `switch model`.
 
 ### Main conversation and approval flow
 
 ```mermaid
 flowchart TD
-    Start([Start CLI]) --> Load[Select explicit conversation ID or latest active open conversation; create one if none exists]
-    Load --> Restore[Restore conversation history, provider, model ID and workflow state]
-    Restore --> Recover[Reconcile interrupted posting attempts and close interrupted calls]
-    Recover --> Pending{Saved approval waiting?}
-    Pending -->|Yes| Display
-    Pending -->|No| Input[Wait for human input in async CLI prompt]
+    Start(["python agent.py --conversation NAME"]) --> Open[Open or create the conversation - load history and saved provider]
+    Open --> Recover[recover: settle any posting a killed run left behind - close dangling calls]
+    Recover --> Pending{Approval saved and waiting?}
+    Pending -->|Yes| Show[Show vendor, invoice number, date, currency, amount]
+    Pending -->|No| Prompt
+    Show --> Prompt[Wait at the you> prompt]
 
-    Input --> Kind{Input type?}
-    Kind -->|Natural-language request| SaveUser[Save user message]
-    Kind -->|Switch provider| Switch[Save selected provider; keep the same history]
-    Switch --> Input
-    Kind -->|Quit| Exit([Save checkpoints and exit])
-    Kind -->|Finish while idle| Finish[Mark conversation completed and exit]
-    Kind -->|New conversation| New[Preserve current conversation; create a new open conversation]
-    New --> Input
-    SaveUser --> Model[Convert history and tool definitions; call Gemini or Groq]
-    Model --> SaveReply[Save assistant response and structured tool calls]
-    SaveReply --> HasCalls{Tool calls requested?}
-    HasCalls -->|No| Answer[Display model answer]
-    Answer --> Input
-    HasCalls -->|Yes| Queue{Another unresolved call in this batch?}
-    Queue -->|No| Model
-    Queue -->|Yes| Tool{Tool type?}
+    Prompt --> Kind{What was typed?}
+    Kind -->|"switch model"| Ask[Ask gemini, groq or openai - compare in code]
+    Ask --> Known{Matches a name?}
+    Known -->|Yes| SaveProv[Save provider - same history]
+    Known -->|No| Refuse[Say not switched]
+    SaveProv --> Prompt
+    Refuse --> Prompt
+    Kind -->|/quit| Exit([Exit - any waiting approval stays saved])
+    Kind -->|/approve or /decline| Waiting{Approval waiting?}
+    Waiting -->|No| NoneWaiting[Say nothing is waiting] --> Prompt
+    Waiting -->|Yes: approve| Approve
+    Waiting -->|Yes: decline| Decline[Save declined result with the reason - nothing posted]
+    Kind -->|Normal text| Blocked{Approval waiting?}
+    Blocked -->|Yes| Show
+    Blocked -->|No| SaveUser[Save user message]
 
-    Tool -->|List or read invoices, look up vendor, or read ledger| Read[Run read-only tool]
-    Tool -->|Explicitly requested provider switch| SwitchTool[Validate target; save provider and model selection]
-    SwitchTool --> Result
-    Read --> Result[Save tool result with its matching call ID]
-    Result --> Queue
+    SaveUser --> Calls
+    Decline --> Calls
+    Approve --> Calls
 
-    Tool -->|Post invoice| Check[Resolve vendor; check status and existing ledger entries]
-    Check --> Allowed{Posting allowed?}
-    Allowed -->|No: blocked, duplicate, or invalid| Refuse[Save refusal as the tool result; do not ask for approval]
-    Refuse --> Queue
-    Allowed -->|Yes| Snapshot[Save exact proposal, action ID, and pending tool call]
-    Snapshot --> Display[Display vendor, invoice number, date, currency, and amount]
-    Display --> Wait[Pause model loop; wait for human input in async CLI prompt]
-    Wait --> Decision{Human command?}
-    Decision -->|Approve| Recheck[Recheck current invoice, vendor status, and duplicates]
-    Recheck --> Unchanged{Still matches and is allowed?}
-    Unchanged -->|No| Refuse
-    Unchanged -->|Yes| Intent[Save approval and posting intent with a stable reference]
-    Intent --> Post[Run supplied ledger.post with the saved reference outside the terminal event loop]
-    Post --> Outcome[Reconcile if needed; save and report actual ledger outcome]
-    Outcome --> Queue
-    Decision -->|Decline with optional reason| Decline[Save decline and reason as the tool result; no posting]
-    Decline --> Queue
-    Decision -->|Switch provider| SwitchPending[Save provider; preserve the waiting proposal]
-    SwitchPending --> Wait
-    Decision -->|Quit| Preserve[Keep approval pending on disk]
-    Preserve --> Exit
-    Exit -.->|Restart the same conversation| Start
+    Calls{Open tool calls from the last model reply?}
+    Calls -->|None| Model[Call the current provider with history and the read and post tools]
+    Model -->|429, 5xx or timeout| Retry[Wait 2, 4, 8, 16 s - Ctrl-C can interrupt]
+    Retry --> Model
+    Model -->|Failed for good| Fail[Close the turn safely: message saved, suggest switch model]
+    Fail --> Prompt
+    Model -->|Reply| SaveReply[Save reply and its tool calls]
+    SaveReply --> HasCalls{Tool calls in the reply?}
+    HasCalls -->|No| Answer[Show the answer] --> Prompt
+    HasCalls -->|Yes, under 20 steps| Calls
+
+    Calls -->|Some| Which{Which tool?}
+    Which -->|read| Read[Run read tool - save result with its call ID] --> Calls
+    Which -->|post| Check[check_posting: vendor active, not already in ledger, invoice valid]
+    Check -->|Refused| Refusal[Save refusal as the tool result - no approval asked] --> Calls
+    Check -->|Allowed| Snapshot[Save exact proposal, action ID and reference - state awaiting_approval]
+    Snapshot --> Show
+
+    Approve[Take the file lock and re-run check_posting - compare with the saved proposal]
+    Approve --> Same{Unchanged and still allowed?}
+    Same -->|No| Stale[Save refusal as the tool result] --> Calls
+    Same -->|Yes| Intent[Save state approved, with its reference, BEFORE posting]
+    Intent --> Post[ledger.post with the reference]
+    Post -->|Returned| Posted[Save posted result with entry ID] --> Calls
+    Post -->|Raised an error| Reconcile[Look the entry up by reference] --> Calls
 ```
 
-**While approval waits:** no model request or ledger write is running. The prompt
-waits for Enter, while commands such as `/status`, `/model`, and `/quit` remain
-available. Approval is accepted only from human command handling; a model's text
-cannot approve its own tool call. A provider switch affects the next model request.
+**While approval waits:** no model request or ledger write is running. Only `/approve`,
+`/decline`, `switch model` and `/quit` act; normal text just shows the approval again.
+Approval comes only from the clerk's command, never from model text.
 
-**Multiple tool calls:** save the complete batch and resolve every call before
-asking the model again. A posting call pauses at its place in that batch; after
-approval or decline, its saved result lets the runner continue the remaining calls.
+**Several tool calls in one reply:** all are saved, then resolved in order. A `post` pauses
+at its place; after approve or decline, the loop carries on with the remaining calls and
+then asks the model again.
 
 ### Stop, failure, and recovery flow
 
 ```mermaid
 flowchart TD
-    Stop([Ctrl+C or /cancel]) --> Phase{Current phase?}
-    Phase -->|Model request or read-only tools| Cancel[Cancel active task; discard late model responses]
-    Cancel --> Checkpoint[Keep completed results; save cancelled results for unfinished calls]
-    Phase -->|Waiting for approval| Invalidate[Invalidate pending approval; save cancellation without posting]
-    Invalidate --> Checkpoint
-    Phase -->|Approved ledger call already started| Supervise[Stop further processing; supervise the short ledger call until it finishes]
-    Supervise --> Record[Save and report whether the invoice was posted]
-    Record --> Checkpoint
-    Checkpoint --> Ready([Return to prompt; accept the next request])
+    Stop([Ctrl-C while the agent is working]) --> Flag[Set the stop flag - keep waiting for the worker to finish]
+    Flag --> Phase{Where is the worker?}
+    Phase -->|Model request or retry wait| Abandon[Abandon the request - discard its late reply]
+    Phase -->|Between read tools| Between[Stop before the next call - keep finished results]
+    Phase -->|Inside ledger.post| Finish[Let the short call finish - save the true outcome]
+    Abandon --> Close
+    Between --> Close
+    Finish --> Close
+    Close[Close the turn: every unfinished call gets a cancelled result, plus a short assistant note]
+    Close --> Ready([Back at the prompt - the next message works with either provider])
+    Idle([Ctrl-C at the prompt or while approval waits]) --> Nothing[Nothing is running - the approval, if any, stays]
 
-    Failure([API or tool failure]) --> Saved[Save failure and completed results; close unfinished calls safely]
-    Saved --> Ready
+    Failure([Provider error that retries cannot fix]) --> Close
 
-    Crash([Process killed during posting]) --> Restart[On restart, load saved posting intent]
-    Restart --> Inspect[Query ledger entries by stable reference and business key]
-    Inspect --> Exists{Matching ledger entry exists?}
-    Exists -->|Yes| Posted[Save recovered entry ID; do not repost]
-    Exists -->|No| Fresh[Record no entry found; require fresh approval before another attempt]
-    Exists -->|Conflicting entry| Conflict[Record conflict; refuse retry and show details for review]
-    Posted --> Ready
-    Fresh --> Ready
-    Conflict --> Ready
+    Crash([Process killed, e.g. during a post]) --> Restart[Restart the same conversation]
+    Restart --> Find{Posting stuck in state approved?}
+    Find -->|No| Dangling[Close any calls left without a result] --> Ready
+    Find -->|Yes| Lookup[ledger entries with that reference]
+    Lookup --> Count{Matching entry?}
+    Count -->|"Exactly one, details match"| Recovered[Save posted result with the recovered entry ID - never repost] --> Dangling
+    Count -->|"Entry exists but does not match"| Conflict[Save conflict - a person must review] --> Dangling
+    Count -->|None| Again[Back to awaiting approval - needs a fresh approve] --> Ready
 ```
 
-A stop cannot undo a committed ledger entry. If a posting error leaves its outcome
-uncertain, reconcile it using the posting-recovery path before allowing a retry.
-Quitting at a waiting approval preserves it; cancelling that approval invalidates it.
+A stop cannot undo a committed ledger entry. If a post raises an error after the ledger saved
+the entry, the same lookup by reference runs straight away, so the clerk is told whether it
+posted. Quitting at a waiting approval keeps it; only `/approve` or `/decline` ends it.
 
 ## 3. Agreed state, tools and recovery decisions
 
@@ -274,6 +312,7 @@ Keep the assignment folder as the authoritative input; avoid duplicate copies.
 fourX/
 ├── FourX_Agent_Implementation_Plan.md
 ├── README.md
+├── agent.py              # python agent.py opens the interactive prompt
 ├── pyproject.toml
 ├── uv.lock
 ├── .env.example
@@ -302,110 +341,16 @@ Its ledger database will remain beside it: `assignment/take-home/ledger.db`.
 
 ## 5. Milestones
 
-### Milestone 1 — Data access and read-only tools
+Code for all milestones is written. Check a box only once its behavior has been shown.
 
-- [x] Define canonical message/tool/action types and resolve the assignment path.
-- [x] Read complete invoice JSON by filename ID, e.g. `invoice-01`.
-- [x] Implement list-invoices and vendor lookup tools.
-- [x] Match invoice `vendor_name` to the vendor registry; fail clearly if unmatched.
-- [x] Preserve monetary strings; use `Decimal` for numeric validation.
-- [x] Reject invalid invoice IDs and path traversal.
-- [x] Add last/all/filter ledger reads and describe all allowed columns in tool schemas.
-- [x] Provide allowlisted read-tool dispatch and a small inspection CLI.
-- [x] Verify behavior using the actual data and temporary copies of the unchanged ledger.
-
-**Done when:** invoice-06 returns the original vendor, INR 21948.00, its taxes and
-one line; vendor V-004 returns its blocked status and reason. No posting occurs.
-
-**Verification:** 36 isolated tests pass. Inspection commands are documented in README.md.
-
-### Milestone 2 — Persistence and conversation state
-
-- [ ] Create SQLite conversation, transcript and approval/attempt storage.
-- [ ] Persist ordered user/assistant messages, calls, arguments and tool results.
-- [ ] Save provider and model selection, pending calls, exact approval snapshots and decisions.
-- [ ] Open/resume by conversation ID; auto-select the latest active open conversation.
-- [ ] Separate conversation lifecycle from workflow status; define recovery transitions.
-- [ ] Define persisted lifecycle operations for quit, finish and new conversation.
-
-**Done when:** closing and reopening the store restores the exact saved state.
-Keep this database separate from the supplied accounting ledger database.
-
-### Milestone 3 — First provider and read-only agent loop
-
-- [ ] Add Gemini native tool declarations using the official `google-genai` SDK.
-- [ ] Add main-agent system instructions for scope, clarification, tool facts and approval.
-- [ ] Send those instructions on each request; no separate guard model.
-- [ ] Implement async model call → persist response → execute tools → persist results
-  → model call, with a bounded number of steps.
-- [ ] Handle multiple calls in one response and correlate every result with its call.
-- [ ] Add the interactive CLI with concurrent input and an owned background task.
-- [ ] Keep post requests disabled until the approval milestone is complete.
-- [ ] Handle missing configuration, malformed responses and API failures safely.
-
-**Done when:** a read-only conversation can inspect real invoice data through the
-loop, with deterministic fake-provider tests and a separately recorded live check.
-
-### Milestone 4 — Human approval and supplied ledger integration
-
-- [ ] Add the `post_invoice` tool as a durable pause in the loop.
-- [ ] Check vendor status and the actual ledger for duplicates before proposing.
-- [ ] Display vendor ID/name, invoice number/date, currency and total.
-- [ ] Save the exact invoice/vendor snapshot before displaying approval.
-- [ ] Support `/approve` and `/decline <optional reason>` from human input only.
-- [ ] Revalidate the snapshot, vendor status and ledger immediately before posting.
-- [ ] Save posting intent and `fourx:<conversation_id>:<action_id>` before calling `ledger.post()`.
-- [ ] Return success/refusal/decline as a tool result, then continue the model loop.
-- [ ] Restore pending approval after quit without automatically approving it.
-
-**Done when:** invoice-01 posts once after approval; invoice-03 declines with its
-reason; invoice-04 and invoice-05 are refused without approval prompts.
-
-### Milestone 5 — Second provider and switching
-
-- [ ] Add Groq native tool calling using the official `groq` SDK.
-- [ ] Implement `/model gemini|groq` between requests, including while approval waits.
-- [ ] Add the allowlisted switching tool for explicit human requests; persist provider/model state.
-- [ ] Record the switching tool result and finish pending calls before the next provider request.
-- [ ] Translate the canonical transcript separately for each provider.
-- [ ] Preserve Gemini content parts/thought signatures for same-model replay.
-- [ ] Convert foreign-provider history explicitly, retaining calls and results without
-  inventing signatures or replaying incompatible raw SDK messages.
-- [ ] Test switching both directions, including an unresolved approval and completed tools.
-
-**Done when:** official scenario 4 works across Gemini → Groq → Gemini using facts
-from the existing conversation, with no missing tool-result or signature errors.
-
-### Milestone 6 — Stop, crash recovery and financial safety
-
-- [ ] Connect Ctrl+C and `/cancel` to cancellation of the active async operation.
-- [ ] Add cancellation checkpoints around read-tool execution; preserve completed results.
-- [ ] Close unfinished calls with cancelled results before the next model request.
-- [ ] Discard late responses from a cancelled model call.
-- [ ] Run the synchronous ledger call outside the terminal event loop.
-- [ ] Once approved posting begins, retain ownership until the short call completes;
-  save/report the true outcome before stopping further processing.
-- [ ] Reconcile an interrupted posting attempt with `ledger.entries()` before any retry.
-- [ ] Serialize agent processes sharing the ledger, since it has no duplicate constraint.
-- [ ] Keep `/quit` distinct from cancelling a waiting approval.
-
-**Important:** the supplied ledger commits partway through its two-second call.
-Cancelling a thread await does not stop the thread, and stopping cannot undo a
-committed write. The agent and ledger use separate databases, so a shared atomic
-transaction is unavailable. Recovery must inspect the ledger, not blindly repost.
-
-**Done when:** stopping reads/model work leaves a usable conversation, and interrupted
-posting recovery cannot create a duplicate or falsely report that nothing was posted.
-
-### Milestone 7 — Assignment acceptance and handoff
-
-- [ ] Exercise all seven scenarios below, in order, in one conversation.
-- [ ] Automate harness checks using fake providers, real fixtures and temporary ledgers.
-- [ ] Verify the live-provider scenarios separately using configured model IDs/keys.
-- [ ] Cover stale approval, duplicate confirmation, interrupted batches and posting recovery.
-- [ ] Keep the project README to the requested one-page explanation.
-- [ ] Document actual models tested, setup, persistence, switching, approval, stop and limits.
-- [ ] Keep keys, local databases, virtual environments and generated state out of Git.
+- [x] **1. Read tools** — invoices, vendors, ledger reads, inspection CLI (tests pass).
+- [x] **2. Persistence** — `storage.py`: conversations, messages, posting attempts, one DB.
+- [x] **3. Loop** — `runner.py` with a scripted-provider test suite (`tests/test_agent.py`).
+- [x] **4. Approval and posting** — checks before and after approval, intent saved before
+  `ledger.post`, reference `fourx:<conversation>:<action>`, recovery from the ledger.
+- [x] **5. Providers** — `providers.py` Gemini and Groq adapters; conversion unit-tested.
+- [x] **6. Stop and recovery** — stop during model/tools; a started post is never abandoned.
+- [ ] **7. Live acceptance** — all seven scenarios on real Gemini and Groq, then README.
 
 ## 6. Seven official acceptance scenarios
 
@@ -425,6 +370,6 @@ SGP/26-27/0412 and BL-88213. Test databases must not alter the user's demo ledge
 
 ## 7. Next action
 
-Milestone 1 is complete. Review the read-tool behavior, then proceed to Milestone 2:
-SQLite conversation storage, lifecycle state and durable checkpoints.
-Installed dependencies remain unchanged; later milestones are not yet implemented.
+Run the seven scenarios live (reset the ledger first), fix what they show, then write
+the one-page README: how to run, models used, what is saved and when, how switching
+works, how approval and stop work, and what was not handled.

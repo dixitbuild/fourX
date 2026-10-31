@@ -1,13 +1,24 @@
 [project]
 name = "fourx"
 version = "0.1.0"
-description = "Add your description here"
+description = "Human-approved CLI invoice agent with durable sessions"
 readme = "README.md"
 authors = [
     { name = "dixit", email = "dixitbuild@gmail.com" }
 ]
-requires-python = ">=3.12"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+    "google-genai>=1.0,<2",
+    "groq>=0.30,<2",
+    "openai>=3.42.0",
+    "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 fourx = "fourx:main"

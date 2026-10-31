@@ -1,2 +1,6 @@
+"""FourX invoice agent, built one milestone at a time."""
+
+
 def main() -> None:
-    print("Hello from fourx!")
+    from .cli import main as cli_main
+    cli_main()
