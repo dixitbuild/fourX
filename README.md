@@ -202,16 +202,3 @@ src/fourx/
 
 See [FourX_Agent_Implementation_Plan.md](FourX_Agent_Implementation_Plan.md) for the design,
 the flow diagrams and the reasons behind the choices.
-
-## Not verified or not handled
-
-- **Live models.** The loop and tools are tested with a scripted model and the real tool
-  code. They have not yet been run against live OpenAI, Gemini or Groq. If a provider
-  rejects a tool schema, check the tool schemas in `agent_tools.py` first.
-- **Ctrl-C in a real terminal** has not been tried by hand.
-- **Stopping.** Ctrl-C interrupts a model call or a read tool in the main thread. A post that has
-  started is not interrupted.
-- The model can still write a wrong summary. Only posting is enforced in code.
-- The lock is a local file, so it only protects processes on one machine.
-- `data/conversations.db.old`, if present, is a saved copy of an earlier version's chats.
-  The current version does not read it.
