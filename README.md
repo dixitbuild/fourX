@@ -23,8 +23,21 @@ python src/fourx/ledger.py reset     # optional: start from a clean demo ledger
 uv run python agent.py               # or: python agent.py, with the .venv active
 ```
 
-In `.env`, set `<NAME>_API_KEY` and `<NAME>_MODEL` for `OPENAI`, `GEMINI` and `GROQ`. You
-need at least one. New conversations start on OpenAI.
+### What to set in `.env`
+
+```
+OPENAI_API_KEY=
+OPENAI_MODEL=
+GEMINI_API_KEY=
+GEMINI_MODEL=
+GROQ_API_KEY=
+GROQ_MODEL=
+SQLITE_PATH=data/conversations.db
+```
+
+Fill in the key and the model name for each model you want to use. You need at least one pair.
+New conversations start on OpenAI, so set the OpenAI pair unless you plan to switch right away.
+`SQLITE_PATH` is optional.
 
 `pytest -q` runs the tests. They use a scripted model and a temporary ledger, so they need
 no API key and never touch the demo ledger.
