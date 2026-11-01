@@ -39,6 +39,11 @@ def switch_model(agent: Agent, name: str = "", ask: Callable[[str], str] = input
     print(agent.switch(answer) if answer in PROVIDERS else f"Not switched: {answer!r} is not one of {', '.join(PROVIDERS)}.")
 
 
+def say(text: str) -> None:
+    """Show the agent's words. A terminal can't render markdown, so drop the bold markers a model may add."""
+    print(f"agent> {text.replace('**', '')}")
+
+
 def chat() -> None:
     store = Store(os.environ.get("SQLITE_PATH") or DEFAULT_DB)
     try:
@@ -46,7 +51,7 @@ def chat() -> None:
     except (EOFError, KeyboardInterrupt):
         print()
         return
-    agent = Agent(store, AgentTools(ReadTools(), store), conversation_id, say=lambda text: print(f"agent> {text}"))
+    agent = Agent(store, AgentTools(ReadTools(), store), conversation_id, say=say)
     state = f"resumed, {len(agent.messages())} messages" if resumed else "new"
     print(f'Conversation "{conversation_id}" ({state}). Model: {store.provider(conversation_id)}.\n{HELP}')
     try:

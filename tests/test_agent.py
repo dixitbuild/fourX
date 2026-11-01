@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from fourx.agent_tools import AgentTools
-from fourx.cli import choose_conversation, switch_model
+from fourx.cli import choose_conversation, say, switch_model
 from fourx.providers import ProviderError
 from fourx.runner import Agent, Quit, open_calls
 from fourx.storage import Store
@@ -220,3 +220,8 @@ def test_model_can_switch_when_the_clerk_asks_and_the_next_call_uses_the_new_mod
 def test_model_is_offered_read_post_and_switch(setup):
     agent, *_ = make_agent(setup)
     assert [tool["name"] for tool in agent.toolbox.definitions] == ["read", "post", "switch_model"]
+
+
+def test_bold_markers_are_not_shown_in_the_terminal(capsys):
+    say("Invoice-06 contains **one line item**.")
+    assert capsys.readouterr().out == "agent> Invoice-06 contains one line item.\n"
