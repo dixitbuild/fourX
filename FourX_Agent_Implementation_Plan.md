@@ -112,20 +112,21 @@ flowchart TD
     Ask -->|continue| Resume[Load the saved history]
     Ask -->|new| Create[Create a new conversation]
     Find -->|No| Create
-    Resume --> Agent[["Main agent (runner)"]]
-    Create --> Agent
-    Agent <--> Model{{Gemini / Groq / OpenAI}}
-    Agent <-->|MCP client| MCP[[MCP server]]
-    MCP --> Switch["Tool 1: switch_model - gemini, groq or openai"]
-    MCP --> Read["Tool 2: read - ledger last / all / filter, invoices, vendors"]
-    MCP --> Post["Tool 3: post - checks, human approval, then ledger.post"]
-    Switch --> Result
-    Read --> Result
-    Post --> Result[Tool result goes back to the main agent]
-    Result --> Reply["Main agent answers the clerk, then asks: shall we work on the next invoice, or is there anything else I can help with?"]
-    Reply --> Next{Clerk's next message}
-    Next -->|"New request"| Agent
-    Next -->|"/quit or /finish"| End([Exit])
+    Resume --> Prompt
+    Create --> Prompt
+
+    subgraph Loop["Conversation loop - repeats until the clerk quits"]
+        Prompt["you> prompt: clerk types a request"] --> Agent[["Main agent (runner)"]]
+        Agent <--> Model{{Gemini / Groq / OpenAI}}
+        Agent <-->|"call a tool, get its result"| MCP[[MCP server]]
+        Agent -->|"checks the result, then answers"| Answer["Answer to the clerk, plus: next invoice, or anything else?"]
+        Answer -->|"loop again: wait for the next message"| Prompt
+    end
+
+    MCP --- Switch["switch_model"]
+    MCP --- Read["read: ledger last / all / filter, invoices, vendors"]
+    MCP --- Post["post: checks, human approval, then ledger.post"]
+    Answer -->|"/quit or /finish"| End([Exit])
 ```
 
 The conversation is a loop. After every outcome, whether an invoice was posted, declined or
