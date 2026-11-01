@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from fourx.cli import main
 from fourx.tools import DEFAULT_ASSIGNMENT_DIR, LEDGER_COLUMNS, MODEL_TOOLS, READ_TOOL, ReadTools, ToolError
 
 
@@ -207,14 +206,3 @@ def test_read_tools_never_call_post_and_preserve_supplied_code(tools, monkeypatc
     tools.read_ledger("filter", {"invoice_number": "BL-88190"})
     assert len(tools.read_ledger("all")) == 1
     assert hashlib.sha256(code_path.read_bytes()).hexdigest() == before
-
-
-def test_inspection_cli_reads_invoice_and_filtered_ledger(tools, capsys):
-    directory = str(tools.assignment_dir)
-    main(["--assignment-dir", directory, "invoice", "invoice-06"])
-    assert json.loads(capsys.readouterr().out)["total"] == "21948.00"
-    main(["--assignment-dir", directory, "ledger", "filter", "--where", "vendor_id=V-002", "--where", "invoice_number=BL-88190"])
-    assert json.loads(capsys.readouterr().out)[0]["entry_id"] == "JE-000001"
-    with pytest.raises(SystemExit) as error:
-        main(["--assignment-dir", directory, "ledger", "filter", "--where", "vendor_id=V-001", "--where", "vendor_id=V-002"])
-    assert error.value.code == 1

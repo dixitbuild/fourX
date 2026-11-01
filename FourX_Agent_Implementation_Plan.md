@@ -62,8 +62,7 @@ The brief says to keep it small and to explain every line, so the build is trimm
   (blocked vendor, duplicate, approval) still apply to whatever the model asks for.
   `/quit` leaves the conversation `open`, so the next launch continues it. `/finish` marks it
   `completed` (refused while an approval waits or a posting is unsettled), so the next launch
-  starts fresh. `--conversation NAME` stays only as an optional override (resume or create that
-  name). No `/new`, and no separate workflow-status field.
+  starts fresh. There is no `--conversation` flag, no `/new`, and no separate workflow-status field.
 - After each finished task (posted, declined, refused, or a question answered) the agent ends
   its reply with a short follow-up asking whether to work on the next invoice or help with
   anything else. This comes from the system prompt, not code; the loop itself is unchanged.
@@ -302,8 +301,7 @@ Notes:
   provider from saved state before each model request.
 - On startup the CLI queries SQLite for conversations with status `open`. If any, ask the
   clerk whether to continue the most recently active one or start new; if none, create a new
-  one with a generated ID. An explicit
-  `--conversation NAME` takes precedence.
+  one with a generated ID. There is no `--conversation` flag.
 - `/quit` saves and exits while keeping the conversation open. `/finish` marks it
   completed and exits; require pending approval and unsettled postings to be resolved first.
 - Resume the same conversation after interruption or restart. A new conversation does not

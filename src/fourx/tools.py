@@ -20,7 +20,7 @@ from typing import Any, Literal, cast
 
 from .models import PROVIDER_NAMES, LedgerEntry, Proposal, ToolDefinition, Vendor
 
-DEFAULT_ASSIGNMENT_DIR = Path(__file__).resolve().parents[2] / "assignment" / "take-home"
+DEFAULT_ASSIGNMENT_DIR = Path(__file__).resolve().parent  # ledger.py, vendors.json and invoices/ sit beside this file
 
 LEDGER_COLUMNS = {
     "entry_id": "Ledger entry identifier, for example JE-000001.",

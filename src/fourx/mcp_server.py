@@ -6,17 +6,16 @@ Every tool returns {"status": ..., ...}; a refused request carries the reason in
 so the model can explain it to the clerk. Run it with: python -m fourx.mcp_server
 """
 import os
-from pathlib import Path
+import signal
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from .llms import get_llm
 from .providers import ProviderError
-from .storage import Store
+from .storage import DEFAULT_DB, Store
 from .tools import ReadTools, ToolError
 
-DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "fourx.db"
 ALL_LIMIT = 100  # read(ledger, all) returns at most this many entries, newest
 
 mcp = FastMCP("fourx")
@@ -43,11 +42,11 @@ def switch_model(conversation_id: str, model: str) -> dict[str, Any]:
         get_llm(model)  # unknown name, or key/model missing in .env
     except ProviderError as exc:
         return issue(f"Not switched: {exc}")
-    current, existed = store.open_conversation(conversation_id, model)
-    if existed and current == model.strip().casefold():
-        return {"status": "ok", "message": f"Already using {current}; nothing changed."}
-    store.set_provider(conversation_id, model.strip().casefold())
-    return {"status": "ok", "message": f"Switched to {model.strip().casefold()}."}
+    name = model.strip().casefold()
+    if store.provider(conversation_id) == name:
+        return {"status": "ok", "message": f"Already using {name}; nothing changed."}
+    store.set_provider(conversation_id, name)
+    return {"status": "ok", "message": f"Switched to {name}."}
 
 
 @mcp.tool()
@@ -103,4 +102,6 @@ def execute_post(invoice_id: str, reference: str, approved_proposal: dict[str, A
 
 
 if __name__ == "__main__":
+    # Ctrl-C in the terminal reaches this process too; only the CLI decides what a stop means.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     mcp.run()
