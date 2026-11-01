@@ -19,7 +19,7 @@ framework. The tools are plain Python methods that the loop calls directly.
 ```sh
 uv sync                              # or: python -m venv .venv && pip install -e .[dev]
 cp .env.example .env                 # fill in a key and a model name for each model you use
-python src/fourx/ledger.py reset     # optional: start from a clean demo ledger
+python ledger.py reset              # optional: start from a clean demo ledger
 uv run python agent.py               # or: python agent.py, with the .venv active
 ```
 
@@ -38,6 +38,16 @@ SQLITE_PATH=data/conversations.db
 Fill in the key and the model name for each model you want to use. You need at least one pair.
 New conversations start on OpenAI, so set the OpenAI pair unless you plan to switch right away.
 `SQLITE_PATH` is optional.
+
+To look at the ledger yourself (use `python3` if `python` is not found):
+
+```sh
+python ledger.py          # list every posted entry
+python ledger.py reset    # delete everything except the one opening entry
+```
+
+The root `ledger.py` only runs the supplied `src/fourx/ledger.py`, so the commands work from the
+repo root. The ledger data is in `src/fourx/ledger.db`.
 
 `pytest -q` runs the tests. They use a scripted model and a temporary ledger, so they need
 no API key and never touch the demo ledger.
@@ -151,6 +161,7 @@ with Google's documented placeholder signature. A 429, 5xx or timeout is retried
 
 ```
 agent.py                  entry point
+  ledger.py                runs src/fourx/ledger.py from the repo root
 src/fourx/
   cli.py                  the prompt, continue-or-new question, commands
   runner.py               the agent loop, approval, stop

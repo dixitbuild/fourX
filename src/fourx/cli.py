@@ -44,6 +44,18 @@ def say(text: str) -> None:
     print(f"agent> {text.replace('**', '')}")
 
 
+def recall(messages: list) -> None:
+    """On continue, remind the clerk where they left off: their last question and the agent's reply."""
+    questions = [m for m in messages if m["role"] == "user"]
+    if not questions:
+        return
+    print(f"Last question: {questions[-1]['content']}")
+    after = messages[messages.index(questions[-1]) + 1:]
+    answers = [m for m in after if m["role"] == "assistant" and m["content"] and not m.get("tool_calls")]
+    if answers:
+        say(answers[-1]["content"])
+
+
 def chat() -> None:
     store = Store(os.environ.get("SQLITE_PATH") or DEFAULT_DB)
     try:
@@ -54,6 +66,8 @@ def chat() -> None:
     agent = Agent(store, AgentTools(ReadTools(), store), conversation_id, say=say)
     state = f"resumed, {len(agent.messages())} messages" if resumed else "new"
     print(f'Conversation "{conversation_id}" ({state}). Model: {store.provider(conversation_id)}.\n{HELP}')
+    if resumed:
+        recall(agent.messages())
     try:
         if resumed and agent.needs_work():
             work(agent, agent.run)  # the conversation stopped mid-turn: the agent carries on

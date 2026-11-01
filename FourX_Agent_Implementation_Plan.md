@@ -354,7 +354,7 @@ Checked boxes mean the automated tests pass, not that the behavior has been show
 | 6 | Post invoice-04 | Refused without approval: V-004 blocked, bank details under verification |
 | 7 | Post invoice-05 | Refused without approval: BL-88190 already posted as JE-000001 |
 
-Start acceptance runs with `python src/fourx/ledger.py reset` and a new conversation. At the
+Start acceptance runs with `python ledger.py reset` and a new conversation. At the
 end the ledger must contain exactly three entries: BL-88190 (opening entry), SGP/26-27/0412
 and BL-88213. Test databases must not alter the user's demo ledger.
 

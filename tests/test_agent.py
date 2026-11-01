@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from fourx.agent_tools import AgentTools
-from fourx.cli import choose_conversation, say, switch_model
+from fourx.cli import choose_conversation, recall, say, switch_model
 from fourx.providers import ProviderError
 from fourx.runner import Agent, Quit, open_calls
 from fourx.storage import Store
@@ -225,3 +225,19 @@ def test_model_is_offered_read_post_and_switch(setup):
 def test_bold_markers_are_not_shown_in_the_terminal(capsys):
     say("Invoice-06 contains **one line item**.")
     assert capsys.readouterr().out == "agent> Invoice-06 contains one line item.\n"
+
+
+def test_continuing_shows_the_last_question_and_its_answer(setup, capsys):
+    agent, *_ = make_agent(setup, text("First answer."), call("read", source="ledger", action="last"),
+                           text("Last is **JE-000001**."))
+    agent.send("first question")
+    agent.send("last entry?")
+    capsys.readouterr()
+    recall(agent.messages())
+    assert capsys.readouterr().out == "Last question: last entry?\nagent> Last is JE-000001.\n"
+
+
+def test_continuing_with_nothing_said_shows_nothing(setup, capsys):
+    agent, *_ = make_agent(setup)
+    recall(agent.messages())
+    assert capsys.readouterr().out == ""
