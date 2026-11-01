@@ -1,15 +1,17 @@
 """All the agent's tools in one place: plain Python methods, called straight from the loop.
 
-The model is offered two: `read` and `post`. Posting is split in two methods so the clerk's
+The model is offered three: `read`, `post` and `switch_model`. Posting is split in two methods so the clerk's
 approval can sit between them: propose_post checks and builds the proposal, execute_post
-posts it after approval. switch_model belongs to the clerk and is never offered to the model.
+posts it after approval. switch_model has two ways in: the CLI calls it directly when the clerk
+types "switch model" (no model involved, so it works when the model is out of quota), and the
+model calls it when the clerk asks in plain words.
 Every method returns {"status": "ok" | "issue", ...}; an issue carries the reason in "message",
 so the model can explain it to the clerk.
 """
 from typing import Any
 
 from .llms import get_llm
-from .models import ToolDefinition
+from .models import PROVIDER_NAMES, ToolDefinition
 from .providers import ProviderError
 from .storage import Store
 from .tools import LEDGER_COLUMNS, ReadTools, ToolError
@@ -41,6 +43,13 @@ POST_TOOL: ToolDefinition = {
         "required": ["invoice_id"], "additionalProperties": False},
 }
 
+SWITCH_TOOL: ToolDefinition = {
+    "name": "switch_model",
+    "description": "Change which model answers from now on. Call it only when the clerk explicitly asks to switch.",
+    "parameters": {"type": "object", "properties": {"model": {"type": "string", "enum": list(PROVIDER_NAMES)}},
+                   "required": ["model"], "additionalProperties": False},
+}
+
 
 def issue(message: str) -> dict[str, Any]:
     return {"status": "issue", "message": message}
@@ -49,7 +58,7 @@ def issue(message: str) -> dict[str, Any]:
 class AgentTools:
     def __init__(self, reader: ReadTools, store: Store):
         self.reader, self.store = reader, store
-        self.definitions = [READ_TOOL, POST_TOOL]  # what the model is offered
+        self.definitions = [READ_TOOL, POST_TOOL, SWITCH_TOOL]  # what the model is offered
 
     def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Run a tool by name. A bad name or bad arguments come back as an issue, never a crash."""

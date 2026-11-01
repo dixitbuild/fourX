@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from fourx.agent_tools import AgentTools
-from fourx.cli import choose_conversation
+from fourx.cli import choose_conversation, switch_model
 from fourx.providers import ProviderError
 from fourx.runner import Agent, Quit, open_calls
 from fourx.storage import Store
@@ -199,3 +199,24 @@ def test_finished_conversation_is_not_offered_again(setup):
     old = store.create("openai")
     store.finish(old)
     assert store.latest_open() is None
+
+
+def test_clerk_can_switch_without_any_model_call(setup, capsys):
+    agent, llm, _, _ = make_agent(setup)  # the scripted model has no replies: any call would fail
+    switch_model(agent, "gemini")
+    assert agent.store.provider(agent.conversation_id) == "gemini"
+    switch_model(agent, "", ask=lambda prompt: "claude")
+    assert "Not switched: 'claude'" in capsys.readouterr().out
+    assert llm.seen == []
+
+
+def test_model_can_switch_when_the_clerk_asks_and_the_next_call_uses_the_new_model(setup):
+    agent, llm, said, _ = make_agent(setup, call("switch_model", model="gemini"), text("Switched."))
+    agent.send("please use gemini")
+    assert llm.seen[1][-1]["tool_result"]["output"]["message"] == "Switched to gemini."
+    assert agent.store.provider(agent.conversation_id) == "gemini"
+
+
+def test_model_is_offered_read_post_and_switch(setup):
+    agent, *_ = make_agent(setup)
+    assert [tool["name"] for tool in agent.toolbox.definitions] == ["read", "post", "switch_model"]

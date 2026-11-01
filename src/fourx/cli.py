@@ -8,8 +8,8 @@ from .runner import Agent, Quit
 from .storage import DEFAULT_DB, Store
 from .tools import ReadTools
 
-HELP = (f'Commands: "switch model" ({", ".join(PROVIDERS)}), /finish, /quit. '
-        "Press Ctrl-C while the agent is working to stop it.")
+HELP = (f'Commands: "switch model" or "switch model <{"|".join(PROVIDERS)}>", /finish, /quit. '
+        "You can also ask the agent in words to switch. Press Ctrl-C while it is working to stop it.")
 
 
 def choose_conversation(store: Store, ask: Callable[[str], str] = input) -> tuple[str, bool]:
@@ -33,9 +33,9 @@ def work(agent: Agent, task: Callable[..., None], *args: str) -> None:
         agent.cancel("The clerk stopped this turn.")
 
 
-def switch_model(agent: Agent, ask: Callable[[str], str] = input) -> None:
-    """Ask which model, compare the answer in code, and let the switch_model tool do it."""
-    answer = ask(f"{', '.join(PROVIDERS[:-1])} or {PROVIDERS[-1]}? ").strip().casefold()
+def switch_model(agent: Agent, name: str = "", ask: Callable[[str], str] = input) -> None:
+    """The clerk's own switch, handled before any model is called. Ask which model unless it was typed."""
+    answer = name or ask(f"{', '.join(PROVIDERS[:-1])} or {PROVIDERS[-1]}? ").strip().casefold()
     print(agent.switch(answer) if answer in PROVIDERS else f"Not switched: {answer!r} is not one of {', '.join(PROVIDERS)}.")
 
 
@@ -60,8 +60,9 @@ def chat() -> None:
                 continue
             if not line:
                 continue
-            if " ".join(line.split()).casefold() == "switch model":
-                switch_model(agent)
+            words = line.casefold().split()
+            if words[:2] == ["switch", "model"]:  # checked on every input, so it never needs a model
+                switch_model(agent, " ".join(words[2:]))
             elif line == "/quit":
                 return
             elif line == "/finish":

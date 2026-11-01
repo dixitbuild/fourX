@@ -26,7 +26,7 @@ no API key and never touch the demo ledger.
 | Type | Effect |
 |---|---|
 | any text | A request for the agent, for example `post invoice-01` or `last ledger entry?` |
-| `switch model` | Asks `gemini, groq or openai?` and switches this conversation to that model. |
+| `switch model` or `switch model groq` | Switches this conversation's model, with no model call. Without a name it asks `gemini, groq or openai?`. |
 | `/approve`, `/decline <reason>` | Answer a waiting approval. |
 | `/quit` | Exit. The conversation stays open, so the next launch can continue it. |
 | `/finish` | Mark the conversation completed and exit. The next launch starts fresh. |
@@ -58,13 +58,13 @@ or help with anything else.
 
 ## The tools
 
-The model is offered two tools. `switch_model` belongs to the clerk and is never offered to it.
+The model is offered three tools. `switch_model` also has a second way in: the clerk can type it.
 
 | Tool | What it does |
 |---|---|
 | `read` | Read-only. Ledger: `last`, `all` (newest 100) or `filter` by any column. Also reads invoices and vendors. A search with no match returns "No matching entries found." |
 | `post` | Becomes `propose_post`, then `execute_post` after the clerk approves. |
-| `switch_model` | Changes the model saved on this conversation. History and any waiting approval stay. |
+| `switch_model` | Changes the model saved on this conversation. History and any waiting approval stay. Two ways in: typed by the clerk (checked on every input, so it works when the current model is out of quota), or called by the model when the clerk asks in plain words. |
 
 ### Posting
 

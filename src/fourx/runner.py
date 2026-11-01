@@ -106,6 +106,10 @@ class Agent:
     def run_tool(self, call: ToolCall) -> Message:
         if call["name"] == "post":
             return self.post(call)
+        if call["name"] == "switch_model":
+            result = self.toolbox.call("switch_model", {"conversation_id": self.conversation_id,
+                                                        "model": str(call["arguments"].get("model", ""))})
+            return tool_message(call, "completed" if result["status"] == "ok" else "refused", result)
         if call["name"] != "read":
             return tool_message(call, "error", {"reason": f"Unknown tool {call['name']}."})
         result = self.toolbox.call("read", call["arguments"])
@@ -162,7 +166,7 @@ class Agent:
         self.say(note)
 
     def switch(self, model: str) -> str:
-        """The clerk's switch, through the switch_model tool. Returns the tool's message."""
+        """The clerk's typed switch, with no model involved. Returns the tool's message."""
         return self.toolbox.call("switch_model", {"conversation_id": self.conversation_id, "model": model})["message"]
 
 
