@@ -135,6 +135,53 @@ follow-up such as "Shall we work on the next invoice, or is there anything else 
 with?" The clerk's next message starts the next pass through the same loop, in the same
 conversation, until `/quit` or `/finish`.
 
+### Post tool (MCP) flow
+
+The `post(invoice_id)` tool checks in a fixed order and stops at the first problem. Every
+refusal goes back to the model as the tool result, with the reason, so the model can explain
+it to the clerk. The checks are code, not model judgement.
+
+```mermaid
+flowchart TD
+    Call["Model calls post(invoice_id)"] --> F1{"Invoice file exists in the invoices folder and is readable?"}
+    F1 -->|No| R1["Return issue: invoice not found"]
+    F1 -->|Yes| F2{"Required fields present: invoice number, date, currency, vendor name, positive total?"}
+    F2 -->|No| R2["Return issue: invoice is incomplete, with the missing fields"]
+    F2 -->|Yes| F3{"Vendor name matches a vendor in vendors.json?"}
+    F3 -->|No| R3["Return issue: vendor is not registered"]
+    F3 -->|Yes| F4{"Vendor status is active?"}
+    F4 -->|"blocked"| R4["Return issue: vendor blocked, with the blocked reason"]
+    F4 -->|active| F5{"Same vendor_id and invoice number already in the ledger?"}
+    F5 -->|"Yes: already processed"| R5["Return issue: already posted, with the existing entry ID"]
+    F5 -->|No: new invoice| Prop["Build the exact proposal: vendor, invoice number, date, currency, total"]
+    Prop --> Appr{"Clerk approves?"}
+    Appr -->|"/decline"| R6["Return result: declined, with the clerk's reason - nothing posted"]
+    Appr -->|"/approve"| Again{"Re-run the vendor and duplicate checks under the lock - still allowed?"}
+    Again -->|No| R7["Return issue: situation changed, nothing posted"]
+    Again -->|Yes| Post["ledger.post with the unique reference"]
+    Post --> OK["Return result: posted, with the new entry ID"]
+
+    R1 --> Back
+    R2 --> Back
+    R3 --> Back
+    R4 --> Back
+    R5 --> Back
+    R6 --> Back
+    R7 --> Back
+    OK --> Back["Result goes back to the main agent, which explains it to the clerk"]
+```
+
+Notes:
+
+- The invoice carries a vendor name, not an ID, so the vendor is found by exact name in
+  `vendors.json`; the ledger duplicate check then uses that vendor's `vendor_id`.
+- Nothing is written to the ledger unless every check passes and the clerk has approved. The
+  approval step is kept even though the checks alone could post, because the brief requires a
+  human to approve every exact posting.
+- The approval comes only from the clerk's `/approve` or `/decline`, never from model text.
+- In the MCP server this is the `propose_post` tool (steps up to the proposal) and the
+  `execute_post` tool (the re-check and `ledger.post`). The runner handles the approval in between.
+
 ## 3. Agreed state, tools and recovery decisions
 
 ### Conversation identity and lifecycle
