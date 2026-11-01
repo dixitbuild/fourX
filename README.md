@@ -6,6 +6,14 @@ vendors, reads the ledger, and posts an invoice only after the clerk approves it
 The agent loop is written by hand on the OpenAI, Gemini and Groq SDKs. There is no agent
 framework. The tools are plain Python methods that the loop calls directly.
 
+## 👉 Start here: the architecture
+
+# [Read the architecture and flow diagrams in FourX_Agent_Implementation_Plan.md](FourX_Agent_Implementation_Plan.md)
+
+> The diagrams there show how a conversation starts, how the agent loop runs, and how each
+> tool works: **posting** (checks and approval), **reading the ledger**, and **switching
+> models**. Read it before the code. It is the quickest way to understand the project.
+
 ## Run
 
 ```sh
@@ -33,6 +41,8 @@ no API key and never touch the demo ledger.
 | Ctrl-C | Stop the agent while it is working. |
 
 ## How it works
+
+The plan has the full diagrams. In short:
 
 ```
 Clerk -> CLI -> Main agent <-> model (OpenAI / Gemini / Groq)
@@ -94,7 +104,31 @@ results). It is separate from the ledger.
 
 ## Switching models
 
-History is stored in one neutral format (role, text, tool calls, tool results), not either
+There are two ways to switch, and they end in the same `switch_model` method.
+
+**1. Typed, hard-coded, no model involved.** The CLI checks every line you type, before it
+reaches the agent. If the line starts with `switch model` (any capitals or spacing), the CLI
+switches itself:
+
+```
+you> switch model              ->  gemini, groq or openai?  (you type a name)
+you> switch model groq         ->  Switched to groq.
+you> switch model claude       ->  Not switched: 'claude' is not one of gemini, groq, openai.
+```
+
+No model is called, so this works even when the current model has run out of tokens or quota.
+That is the reason it exists. Use it if the current model stops answering. It is available at the
+`you>` prompt, not at a waiting `approval>` prompt.
+
+**2. By the model.** `switch_model` is also a tool the model is offered. If you say "please use
+gemini", the model calls it. This needs a working model, and the system prompt tells the model
+to switch only when you explicitly ask.
+
+Either way, a switch is refused if the name is not `openai`, `gemini` or `groq`, or if that
+model's key or model name is missing in `.env`. If it is already the active model, nothing
+changes. The switch applies to the current conversation only. The history stays.
+
+**How history carries over.** History is stored in one neutral format (role, text, tool calls, tool results), not either
 SDK's. Each adapter in `providers.py` converts it on every request, so switching only changes
 which adapter reads the same history. Gemini needs its thought signatures sent back exactly,
 so a Gemini reply also keeps its raw parts. Calls made by another model are sent to Gemini
@@ -115,7 +149,8 @@ src/fourx/
   ledger.py, vendors.json, invoices/    the supplied data (ledger.py is unchanged)
 ```
 
-`FourX_Agent_Implementation_Plan.md` has the design and flow diagrams.
+See [FourX_Agent_Implementation_Plan.md](FourX_Agent_Implementation_Plan.md) for the design,
+the flow diagrams and the reasons behind the choices.
 
 ## Not verified or not handled
 
