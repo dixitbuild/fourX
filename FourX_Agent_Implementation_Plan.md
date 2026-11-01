@@ -88,7 +88,10 @@ flowchart TD
     Create --> Prompt
 
     subgraph Loop["Conversation loop - repeats until the clerk quits"]
-        Prompt["you> prompt: clerk types a request or a command"] --> Agent[["Main agent (runner)"]]
+        Prompt["you> prompt: clerk types a request or a command"] --> Check{"Hard-coded check on every input: does it start with 'switch model'?"}
+        Check -->|"Yes"| Hard["Switch in code, no model call: use the name typed, or show the options gemini, groq, openai and read the answer"]
+        Hard -->|"back to the prompt"| Prompt
+        Check -->|"No"| Agent[["Main agent (runner)"]]
         Agent <--> Model{{Gemini / Groq / OpenAI}}
         Agent <-->|"call a tool, get its result"| Tools[[Tools: plain Python methods]]
         Agent -->|"checks the result, then answers"| Answer["Answer to the clerk, plus: next invoice, or anything else?"]
@@ -100,6 +103,10 @@ flowchart TD
     Tools --- Post["post: checks, human approval, then ledger.post"]
     Answer -->|"/quit or /finish"| End([Exit])
 ```
+
+The first thing that happens to every input is a hard-coded check in the CLI, before any model
+is called: if the line starts with `switch model`, the CLI switches the model itself, so a model
+that is out of tokens or quota can never block a switch. Everything else goes to the main agent.
 
 The conversation is a loop. After every outcome, whether an invoice was posted, declined or
 refused, or a question was answered, the main agent comes back to the clerk with a short
@@ -113,7 +120,9 @@ One turn, start to finish. The model never approves anything; only the clerk doe
 
 ```mermaid
 flowchart TD
-    Msg["Clerk sends a message"] --> Save["Save it, then send the history to the model"]
+    Msg["Clerk sends a message"] --> Hard{"Starts with 'switch model'? Hard-coded check, no model involved"}
+    Hard -->|"Yes: switch in code"| Msg
+    Hard -->|"No"| Save["Save it, then send the history to the model"]
     Save --> Model{"Model replies with: an answer, or a tool call?"}
     Model -->|"Answer"| Show["Show the answer to the clerk"] --> Done([Wait for the next message])
     Model -->|"read or switch_model"| Run["Run the tool, save the result"] --> Model
