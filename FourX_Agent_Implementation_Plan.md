@@ -64,6 +64,9 @@ The brief says to keep it small and to explain every line, so the build is trimm
   `completed` (refused while an approval waits or a posting is unsettled), so the next launch
   starts fresh. `--conversation NAME` stays only as an optional override (resume or create that
   name). No `/new`, and no separate workflow-status field.
+- After each finished task (posted, declined, refused, or a question answered) the agent ends
+  its reply with a short follow-up asking whether to work on the next invoice or help with
+  anything else. This comes from the system prompt, not code; the loop itself is unchanged.
 - Ctrl-C never cancels a waiting approval; only `/approve` or `/decline` ends it. A
   normal message typed while an approval waits re-shows the approval.
 - Duplicates are judged by the real ledger only. Saved posting attempts are used only
@@ -116,7 +119,20 @@ flowchart TD
     MCP --> Switch["Tool 1: switch_model - gemini, groq or openai"]
     MCP --> Read["Tool 2: read - ledger last / all / filter, invoices, vendors"]
     MCP --> Post["Tool 3: post - checks, human approval, then ledger.post"]
+    Switch --> Result
+    Read --> Result
+    Post --> Result[Tool result goes back to the main agent]
+    Result --> Reply["Main agent answers the clerk, then asks: shall we work on the next invoice, or is there anything else I can help with?"]
+    Reply --> Next{Clerk's next message}
+    Next -->|"New request"| Agent
+    Next -->|"/quit or /finish"| End([Exit])
 ```
+
+The conversation is a loop. After every outcome, whether an invoice was posted, declined or
+refused, or a question was answered, the main agent comes back to the clerk with a short
+follow-up such as "Shall we work on the next invoice, or is there anything else I can help
+with?" The clerk's next message starts the next pass through the same loop, in the same
+conversation, until `/quit` or `/finish`.
 
 ## 3. Agreed state, tools and recovery decisions
 
