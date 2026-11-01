@@ -135,6 +135,29 @@ follow-up such as "Shall we work on the next invoice, or is there anything else 
 with?" The clerk's next message starts the next pass through the same loop, in the same
 conversation, until `/quit` or `/finish`.
 
+### Conversation and approval flow (simple)
+
+One turn, start to finish. The model never approves anything; only the clerk does.
+
+```mermaid
+flowchart TD
+    Msg["Clerk sends a message"] --> Save["Save it, then send the history to the model"]
+    Save --> Model{"Model replies with: an answer, or a tool call?"}
+    Model -->|"Answer"| Show["Show the answer to the clerk"] --> Done([Wait for the next message])
+    Model -->|"read or switch_model"| Run["Run the MCP tool, save the result"] --> Model
+    Model -->|"post"| Propose["MCP propose_post: run the checks"]
+    Propose -->|"Refused"| Back["Save the reason as the tool result"] --> Model
+    Propose -->|"Allowed"| Wait["Show the exact proposal and WAIT for the clerk"]
+    Wait -->|"/decline reason"| Declined["Save: declined, with the reason"] --> Model
+    Wait -->|"/approve"| Exec["MCP execute_post: re-check, then post to the ledger"]
+    Exec --> Posted["Save the result: posted with entry ID, or refused"] --> Model
+    Wait -->|"/quit"| Kept(["Exit; the proposal stays saved for the next launch"])
+```
+
+In words: the model keeps asking for tools until it has enough to answer. Every tool result,
+including a refusal or a decline, goes back to the model, which then explains it to the clerk.
+Only `post` stops and waits. While it waits, other typed text just shows the proposal again.
+
 ### Post tool (MCP) flow
 
 The `post(invoice_id)` tool checks in a fixed order and stops at the first problem. Every
@@ -181,6 +204,90 @@ Notes:
 - The approval comes only from the clerk's `/approve` or `/decline`, never from model text.
 - In the MCP server this is the `propose_post` tool (steps up to the proposal) and the
   `execute_post` tool (the re-check and `ledger.post`). The runner handles the approval in between.
+
+### Switch model (MCP) flow
+
+The `switch_model(model)` tool changes which LLM (OpenAI, Gemini or Groq) answers in the
+current conversation. The conversation ID, the saved history and any waiting approval stay
+the same; only the provider saved on that conversation changes.
+
+```mermaid
+flowchart TD
+    Ask["Clerk asks to switch the model"] --> Which["CLI asks: openai, gemini or groq?"]
+    Which --> F1{"Answer matches one of the three names? Compared in code"}
+    F1 -->|No| R1["Return issue: not switched, unknown name"]
+    F1 -->|Yes| F2{"Already the active model for this conversation?"}
+    F2 -->|Yes| R2["Return result: already using it, nothing changed"]
+    F2 -->|No| F3{"API key and model name for it set in .env?"}
+    F3 -->|No| R3["Return issue: that model is not configured, still on the old one"]
+    F3 -->|Yes| Save["Save the new provider on this conversation ID in SQLite"]
+    Save --> OK["Return result: switched to the new model"]
+    OK --> Next["Next model request uses the new provider with the same saved history"]
+
+    R1 --> Back
+    R2 --> Back
+    R3 --> Back
+    Next --> Back["Result goes back to the main agent, which tells the clerk"]
+```
+
+Notes:
+
+- Switching is a saved-state change only; it makes no model request, so it works even when the
+  current model is out of quota, and while an approval is waiting.
+- The switch is per conversation. Another conversation keeps its own saved provider.
+- Switching is allowed only when the clerk asks; the model never switches itself.
+- History is stored in our own format, so the new provider reads the earlier messages and tool
+  results as if it had written them.
+
+### Read ledger (MCP) flow
+
+The `read` tool looks at the ledger without ever writing to it. For the ledger it has three
+actions: `last`, `all` and `filter`. It returns the rows it finds, or a clear "no entries
+found" result, so the model can tell the clerk. Bad requests return the issue instead.
+
+```mermaid
+flowchart TD
+    Call["Model calls read with source ledger and an action"] --> A{"Which action?"}
+    A -->|"Not last, all or filter"| R0["Return issue: unknown action"]
+
+    A -->|last| L1{"Filters given?"}
+    L1 -->|Yes| R1["Return issue: last takes no filters"]
+    L1 -->|No| L2["Read the ledger and take the newest entry by posted_at, then entry_id"]
+
+    A -->|all| M1{"Filters given?"}
+    M1 -->|Yes| R2["Return issue: all takes no filters"]
+    M1 -->|No| M2["Read every ledger entry, oldest first"]
+
+    A -->|filter| F1{"At least one column and value given?"}
+    F1 -->|No| R3["Return issue: filter needs at least one column and value"]
+    F1 -->|Yes| F2{"Every column is a real ledger column and every value is text?"}
+    F2 -->|No| R4["Return issue: names the bad column or value"]
+    F2 -->|Yes| F3["Read entries where every column equals its value (AND)"]
+
+    L2 --> Found
+    M2 --> Found
+    F3 --> Found{"Any rows found?"}
+    Found -->|Yes| OK["Return the rows"]
+    Found -->|No| None["Return result: no matching entries found"]
+
+    R0 --> Back
+    R1 --> Back
+    R2 --> Back
+    R3 --> Back
+    R4 --> Back
+    OK --> Back
+    None --> Back["Result goes back to the main agent, which explains it to the clerk"]
+```
+
+Notes:
+
+- Columns: `entry_id`, `vendor_id`, `invoice_number`, `invoice_date`, `currency`, `amount`,
+  `reference`, `posted_at` (see "Read tools and ledger columns" below).
+- Filters use exact equality, so `amount` is matched as text such as `25960.00`, and
+  `posted_at` must match the full timestamp.
+- "No entries found" is a normal answer, not an error. For `last` and `all` it means the
+  ledger is empty; for `filter` it means nothing matched.
+- The tool only reads through `ledger.entries()`. It never calls `ledger.post()`.
 
 ## 3. Agreed state, tools and recovery decisions
 
