@@ -63,6 +63,33 @@ no API key and never touch the demo ledger.
 | `/finish` | Mark the conversation completed and exit. The next launch starts fresh. |
 | Ctrl-C | Stop the agent while it is working. |
 
+## Configuration and limits
+
+**Set in `.env`** (the only things you need to configure):
+
+| Variable | Needed | Meaning |
+|---|---|---|
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | one pair at least | OpenAI key and the model name to use. |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | optional | Google Gemini key and model name. |
+| `GROQ_API_KEY`, `GROQ_MODEL` | optional | Groq key and model name. |
+| `SQLITE_PATH` | optional | Where conversations are saved. Default `data/conversations.db`. |
+
+A model whose key or model name is missing cannot be used or switched to.
+
+**Fixed in code** (change them in the file named, they are not environment settings):
+
+| Setting | Value | File | Meaning |
+|---|---|---|---|
+| Retries | **4 retries**, so up to 5 attempts | `runner.py` `MAX_RETRIES` | Per model request. |
+| Wait between retries | 2, 4, 8, then 16 seconds | `runner.py` | Doubles each time. |
+| What is retried | rate limit (429), server error (5xx), timeout or connection error, an empty Gemini reply, and Groq's `tool_use_failed` | `providers.py` | Anything else fails at once. A Gemini per-day quota error is not retried, since waiting seconds won't clear it. |
+| Model request timeout | 60 seconds | `providers.py` `TIMEOUT_SECONDS` | Per attempt. |
+| Max tool steps per turn | 20 | `runner.py` `MAX_STEPS` | Then the turn is closed with a note. |
+| Ledger `all` rows | newest 100 | `agent_tools.py` `ALL_LIMIT` | Flagged `truncated`; use `filter` for older ones. |
+| Default model | `openai` | `providers.py` `DEFAULT_PROVIDER` | For new conversations. |
+
+While a retry wait is running, Ctrl-C stops it.
+
 ## How it works
 
 The plan has the full diagrams. In short:
