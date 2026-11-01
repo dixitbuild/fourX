@@ -2,10 +2,11 @@
 import os
 from collections.abc import Callable
 
-from .mcp_client import McpClient
+from .agent_tools import AgentTools
 from .providers import DEFAULT_PROVIDER, PROVIDERS
 from .runner import Agent, Quit
 from .storage import DEFAULT_DB, Store
+from .tools import ReadTools
 
 HELP = (f'Commands: "switch model" ({", ".join(PROVIDERS)}), /finish, /quit. '
         "Press Ctrl-C while the agent is working to stop it.")
@@ -40,39 +41,39 @@ def switch_model(agent: Agent, ask: Callable[[str], str] = input) -> None:
 
 def chat() -> None:
     store = Store(os.environ.get("SQLITE_PATH") or DEFAULT_DB)
-    conversation_id, resumed = choose_conversation(store)
-    mcp = McpClient()
     try:
-        agent = Agent(store, mcp, conversation_id, say=lambda text: print(f"agent> {text}"))
-        state = f"resumed, {len(agent.messages())} messages" if resumed else "new"
-        print(f'Conversation "{conversation_id}" ({state}). Model: {store.provider(conversation_id)}.\n{HELP}')
-        try:
-            if resumed and agent.needs_work():
-                work(agent, agent.run)  # the conversation stopped mid-turn: the agent carries on
-            while True:
-                try:
-                    line = input("you> ").strip()
-                except KeyboardInterrupt:
-                    print("\nNothing is running. Use /quit to exit.")
-                    continue
-                if not line:
-                    continue
-                if " ".join(line.split()).casefold() == "switch model":
-                    switch_model(agent)
-                elif line == "/quit":
-                    return
-                elif line == "/finish":
-                    store.finish(conversation_id)
-                    print("Conversation finished. The next launch starts a new one.")
-                    return
-                elif line.startswith("/"):
-                    print(HELP)
-                else:
-                    work(agent, agent.send, line)
-        except (Quit, EOFError):
-            print("\nGoodbye. An approval that was waiting will be asked again when you continue.")
-    finally:
-        mcp.close()
+        conversation_id, resumed = choose_conversation(store)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    agent = Agent(store, AgentTools(ReadTools(), store), conversation_id, say=lambda text: print(f"agent> {text}"))
+    state = f"resumed, {len(agent.messages())} messages" if resumed else "new"
+    print(f'Conversation "{conversation_id}" ({state}). Model: {store.provider(conversation_id)}.\n{HELP}')
+    try:
+        if resumed and agent.needs_work():
+            work(agent, agent.run)  # the conversation stopped mid-turn: the agent carries on
+        while True:
+            try:
+                line = input("you> ").strip()
+            except KeyboardInterrupt:
+                print("\nNothing is running. Use /quit to exit.")
+                continue
+            if not line:
+                continue
+            if " ".join(line.split()).casefold() == "switch model":
+                switch_model(agent)
+            elif line == "/quit":
+                return
+            elif line == "/finish":
+                store.finish(conversation_id)
+                print("Conversation finished. The next launch starts a new one.")
+                return
+            elif line.startswith("/"):
+                print(HELP)
+            else:
+                work(agent, agent.send, line)
+    except (Quit, EOFError):
+        print("\nGoodbye. An approval that was waiting will be asked again when you continue.")
 
 
 def main() -> None:

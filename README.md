@@ -1,91 +1,131 @@
 # FourX: accounts payable agent
 
-A command-line agent for an Acme Foods clerk: it reads invoices, checks vendors, and
-posts to the supplied ledger only after a person approves. The agent loop, storage and
-provider conversion are written by hand on the Gemini, Groq and OpenAI SDKs; no agent framework.
+A command-line agent for an Acme Foods accounts payable clerk. It reads invoices, checks
+vendors, reads the ledger, and posts an invoice only after the clerk approves it.
+
+The agent loop is written by hand on the OpenAI, Gemini and Groq SDKs. There is no agent
+framework. The tools are plain Python methods that the loop calls directly.
 
 ## Run
 
 ```sh
-uv sync                                    # or: python -m venv .venv && pip install -e .[dev]
-cp .env.example .env                       # set the API key and model for each provider you use
-python assignment/take-home/ledger.py reset
-python agent.py --conversation demo
+uv sync                              # or: python -m venv .venv && pip install -e .[dev]
+cp .env.example .env                 # fill in a key and a model name for each model you use
+python src/fourx/ledger.py reset     # optional: start from a clean demo ledger
+uv run python agent.py               # or: python agent.py, with the .venv active
 ```
 
-New conversations start on OpenAI. Commands: type `switch model` (then gemini, groq or openai), `/approve`, `/decline <reason>`, `/quit`. Ctrl-C while the
-agent is working stops it. Models used: `openai/gpt-oss-120b` (Groq), `gpt-4o-mini` (OpenAI) and `gemini-3.8-flash`.
-`pytest -q` runs 63 tests with a scripted provider and a temporary ledger copy.
-`FOURX_TOOL_DELAY=3` slows each read tool so test case 5 can be stopped by hand.
+In `.env`, set `<NAME>_API_KEY` and `<NAME>_MODEL` for `OPENAI`, `GEMINI` and `GROQ`. You
+need at least one. New conversations start on OpenAI.
 
-**Layout.** The brief suggests putting the code next to `ledger.py`. It lives in `src/fourx/`
-instead and loads the untouched `assignment/take-home/ledger.py` by path, so there is one
-ledger and one `ledger.db` (`assignment/take-home/ledger.db`).
+`pytest -q` runs the tests. They use a scripted model and a temporary ledger, so they need
+no API key and never touch the demo ledger.
+
+### Commands
+
+| Type | Effect |
+|---|---|
+| any text | A request for the agent, for example `post invoice-01` or `last ledger entry?` |
+| `switch model` | Asks `gemini, groq or openai?` and switches this conversation to that model. |
+| `/approve`, `/decline <reason>` | Answer a waiting approval. |
+| `/quit` | Exit. The conversation stays open, so the next launch can continue it. |
+| `/finish` | Mark the conversation completed and exit. The next launch starts fresh. |
+| Ctrl-C | Stop the agent while it is working. |
+
+## How it works
+
+```
+Clerk -> CLI -> Main agent <-> model (OpenAI / Gemini / Groq)
+                    |
+                    +-- tools (AgentTools): switch_model, read, propose_post, execute_post
+```
+
+**Startup.** If SQLite holds an unfinished conversation, the CLI asks `continue` or `new`.
+`continue` reloads the saved history, and the agent carries on if it stopped mid-turn.
+`new` creates a separate conversation, and the old one stays open. With nothing unfinished,
+a new conversation starts without asking.
+
+**The loop** is `Agent.run()` in `src/fourx/runner.py`:
+
+1. Ask the model.
+2. If it answers in text, show the answer and stop.
+3. If it asks for tools, run each one, save its result, and ask the model again.
+
+Every message is saved to SQLite the moment it exists, so a restart loses nothing.
+
+After each task, the system prompt has the agent ask whether to work on the next invoice
+or help with anything else.
+
+## The tools
+
+The model is offered two tools. `switch_model` belongs to the clerk and is never offered to it.
+
+| Tool | What it does |
+|---|---|
+| `read` | Read-only. Ledger: `last`, `all` (newest 100) or `filter` by any column. Also reads invoices and vendors. A search with no match returns "No matching entries found." |
+| `post` | Becomes `propose_post`, then `execute_post` after the clerk approves. |
+| `switch_model` | Changes the model saved on this conversation. History and any waiting approval stay. |
+
+### Posting
+
+1. `propose_post(invoice_id)` checks, in order: the invoice file exists and is complete, the
+   vendor is registered, the vendor is **active**, and the same vendor and invoice number
+   are **not already in the ledger**. It writes nothing. Any failure is returned to the model
+   as a reason, and the clerk is not asked.
+2. The CLI shows the exact vendor, invoice number, date and amount, built from the files on
+   disk. The model cannot supply an amount. It waits for `/approve` or `/decline <reason>`.
+3. `execute_post` re-checks under a file lock, since an approval can wait and two terminals
+   could race. If anything changed it refuses, otherwise it calls `ledger.post`.
+
+Only the clerk's command approves. Model text never does.
 
 ## What is saved, and when
 
-One SQLite file, `data/fourx.db`, separate from the ledger. Each write commits before the
-agent moves on: the user message, each model reply (with its tool calls), each tool result,
-the provider choice, and each posting attempt (exact proposal, state, reference, entry id).
-A tool result and the posting state it belongs to are written in one transaction.
-Quit anywhere and restart with the same `--conversation`: the history, provider and any
-waiting approval come back.
+`data/conversations.db` holds two tables: conversations (model, `open` or `completed`,
+last active time) and messages (user text, model replies with their tool calls, tool
+results). It is separate from the ledger.
 
-## Tools, providers and switching
+- **Quit during an approval.** The post call has no result yet, so the next launch asks for
+  approval again. Nothing is posted in between.
+- **Killed during a post.** On restart the post call is still open and is checked again. If
+  the ledger already has the entry, the duplicate check refuses it, so it cannot be posted twice.
+- **Stop (Ctrl-C).** Every unfinished call gets a "cancelled" result, so the next message
+  is valid for any model. A post that has already started is allowed to finish.
 
-The model is offered two tools: `read` (source `invoices`, `vendors` or `ledger`; mode `single`,
-`filter` or `all`) and `post` (one invoice, checked and approved before anything is written).
-A third tool, `switch_model`, is defined but only the program runs it: when the clerk types exactly
-`switch model`, the program asks `gemini, groq or openai?` and compares the answer in code. No model
-is called, so it works even when the current model is out of quota or tokens. Anything else is
-refused. These are local Python tools, not a separate MCP server.
+## Switching models
 
-History is stored in our own format (role, text, tool calls, tool results), not either SDK's.
-Each adapter converts it on every request (Groq and OpenAI share one, since their formats match),
-so switching just changes which adapter reads the same history, including earlier tool calls and
-results. Conversations saved before this change may contain the older tool names in their history.
-Gemini needs its thought signatures sent back exactly, so a Gemini reply also keeps its raw
-parts, used only when Gemini reads its own turn. Tool calls made by Groq or OpenAI are sent to Gemini
-with Google's documented placeholder signature; I confirmed live that Gemini rejects such a
-call without one (HTTP 400) and accepts it with one. A 429, 5xx or timeout is retried with a
-wait that Ctrl-C can interrupt; a Gemini per-day quota error is not retried.
+History is stored in one neutral format (role, text, tool calls, tool results), not either
+SDK's. Each adapter in `providers.py` converts it on every request, so switching only changes
+which adapter reads the same history. Gemini needs its thought signatures sent back exactly,
+so a Gemini reply also keeps its raw parts. Calls made by another model are sent to Gemini
+with Google's documented placeholder signature. A 429, 5xx or timeout is retried with a wait.
 
-## Approval, safety and stop
+## Layout
 
-- `post` does not write by itself. Code builds the proposal from the invoice and
-  vendor files and shows vendor, invoice number, date and amount. The model cannot supply
-  an amount.
-- A blocked vendor, or the same vendor and invoice number already in the ledger, is refused
-  before any approval is asked. Both checks run again after `/approve`, under a file lock,
-  because an approval can wait and two terminals could race.
-- Before calling `ledger.post`, the intent is saved with reference `fourx:<conversation>:<id>`.
-  The ledger commits partway through its call, so after a kill or error the agent looks the
-  entry up by that reference, records it if it exists, and never reposts. If nothing was
-  saved, it asks for approval again. A mismatching entry is flagged for a person.
-- Typing a normal message while an approval waits just shows the approval again; `switch model` still works.
-- Ctrl-C asks the worker thread to stop. A model call is abandoned (its late reply is
-  discarded) and a tool loop stops between calls. Every unfinished call gets a "cancelled"
-  result, so the next request is valid for either provider. A post that has started is
-  allowed to finish, so the outcome is known and recorded.
+```
+agent.py                  entry point
+src/fourx/
+  cli.py                  the prompt, continue-or-new question, commands
+  runner.py               the agent loop, approval, stop
+  agent_tools.py          the tools, all in one file
+  tools.py                invoice, vendor and ledger logic behind the tools
+  llms.py, providers.py   get_llm(name) and the OpenAI / Gemini / Groq adapters
+  storage.py              SQLite conversations
+  prompts.py              the system prompt
+  ledger.py, vendors.json, invoices/    the supplied data (ledger.py is unchanged)
+```
 
-## Verified live
+`FourX_Agent_Implementation_Plan.md` has the design and flow diagrams.
 
-Earlier build (Groq, with tools named differently): cases 1, 2 (quit at the approval, restart,
-approve), 3, 6 and 7 behaved as expected and the ledger ended with exactly the 3 expected entries.
-Case 5 stopped at once with the tools slowed, and the next answer said only invoice-01 was read.
-Case 4 went Groq -> OpenAI -> Groq with correct answers (Shree Ganesh Packaging Pvt Ltd,
-INR 21948.00, one line).
+## Not verified or not handled
 
-After the `read`/`post`/`switch model` redesign, live and by hand: `read` filter on invoices and
-vendors, `read` single on the ledger, `post invoice-04` refused as blocked, `switch model` to Groq,
-to Gemini (which then failed fast on its exhausted daily quota) and back to OpenAI, and a bad name
-refused. Cases 1, 2, 3, 5 and 7 were **not** re-run live after the redesign; the automated tests
-cover them with the new tool names. Gemini's leg of case 4 is not verified live (its free quota
-ran out); its conversion is unit-tested and the signature behaviour was checked directly.
-
-## Not handled / next
-
-- No process-wide cancel of a hung SDK call; stop abandons it, and its thread lingers.
-- The model can still write a wrong summary; only posting is enforced in code.
+- **Live models.** The loop and tools are tested with a scripted model and the real tool
+  code. They have not yet been run against live OpenAI, Gemini or Groq. If a provider
+  rejects a tool schema, check the tool schemas in `agent_tools.py` first.
+- **Ctrl-C in a real terminal** has not been tried by hand.
+- **Stopping.** Ctrl-C interrupts a model call or a read tool in the main thread. A post that has
+  started is not interrupted.
+- The model can still write a wrong summary. Only posting is enforced in code.
 - The lock is a local file, so it only protects processes on one machine.
-- Next: run a switch through Gemini once quota resets; a test for crashing between save and post.
+- `data/conversations.db.old`, if present, is a saved copy of an earlier version's chats.
+  The current version does not read it.

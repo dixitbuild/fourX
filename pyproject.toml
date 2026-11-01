@@ -10,7 +10,6 @@ requires-python = ">=3.11"
 dependencies = [
     "google-genai>=1.0,<2",
     "groq>=0.30,<2",
-    "mcp>=1.2,<2",
     "openai>=3.42.0",
     "python-dotenv>=1.0,<2",
 ]

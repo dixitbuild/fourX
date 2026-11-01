@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from fourx import mcp_server
+from fourx.agent_tools import AgentTools
 from fourx.cli import choose_conversation
 from fourx.providers import ProviderError
 from fourx.runner import Agent, Quit, open_calls
@@ -37,15 +37,6 @@ class Scripted:
         return reply
 
 
-class DirectMcp:
-    """Calls the MCP server's tool functions directly, without starting a process."""
-    def tools(self):
-        return [{"name": "read", "description": "", "parameters": {}}]
-
-    def call(self, name, arguments):
-        return getattr(mcp_server, name)(**arguments)
-
-
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     folder = tmp_path / "assignment"
@@ -55,8 +46,6 @@ def setup(tmp_path, monkeypatch):
     shutil.copytree(DEFAULT_ASSIGNMENT_DIR / "invoices", folder / "invoices")
     reader = ReadTools(folder)
     reader._load_ledger().time = SimpleNamespace(sleep=lambda seconds: None)  # skip the 2-second post
-    monkeypatch.setattr(mcp_server, "_tools", reader)
-    monkeypatch.setenv("SQLITE_PATH", str(tmp_path / "chat.db"))
     monkeypatch.setenv("GEMINI_API_KEY", "x")
     monkeypatch.setenv("GEMINI_MODEL", "m")
     return reader, Store(tmp_path / "chat.db")
@@ -65,7 +54,7 @@ def setup(tmp_path, monkeypatch):
 def make_agent(setup, *replies, answers=()):
     reader, store = setup
     llm, said, asked = Scripted(*replies), [], iter(answers)
-    agent = Agent(store, DirectMcp(), store.create("openai"), say=said.append, ask=lambda prompt: next(asked),
+    agent = Agent(store, AgentTools(reader, store), store.create("openai"), say=said.append, ask=lambda prompt: next(asked),
                   make_llm=lambda name: llm)
     return agent, llm, said, reader
 

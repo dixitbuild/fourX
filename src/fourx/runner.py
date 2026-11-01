@@ -5,22 +5,15 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
 
+from .agent_tools import AgentTools
 from .llms import get_llm
-from .models import Message, ToolCall, ToolDefinition
+from .models import Message, ToolCall
 from .prompts import SYSTEM_PROMPT
 from .providers import ProviderError
 from .storage import Store
 
 MAX_STEPS = 20
 MAX_RETRIES = 4
-POST_TOOL: ToolDefinition = {
-    "name": "post",
-    "description": "Ask to post an invoice to the ledger. The program checks it, then the clerk must approve it. "
-                   "Never say an invoice was posted unless the result gives an entry_id.",
-    "parameters": {"type": "object", "properties": {"invoice_id": {
-        "type": "string", "description": "Filename without .json, for example invoice-01."}},
-        "required": ["invoice_id"], "additionalProperties": False},
-}
 
 
 class Quit(Exception):
@@ -52,12 +45,10 @@ def ignoring_ctrl_c():
 
 
 class Agent:
-    def __init__(self, store: Store, mcp: Any, conversation_id: str, say: Callable[[str], None] = print,
+    def __init__(self, store: Store, toolbox: AgentTools, conversation_id: str, say: Callable[[str], None] = print,
                  ask: Callable[[str], str] = input, make_llm: Callable = get_llm):
-        self.store, self.mcp, self.conversation_id = store, mcp, conversation_id
+        self.store, self.toolbox, self.conversation_id = store, toolbox, conversation_id
         self.say, self.ask, self.make_llm = say, ask, make_llm
-        # The model may read and post. switch_model is the clerk's, so the model is never offered it.
-        self.tools = [tool for tool in mcp.tools() if tool["name"] == "read"] + [POST_TOOL]
 
     def messages(self) -> list[Message]:
         return self.store.messages(self.conversation_id)
@@ -101,7 +92,7 @@ class Agent:
         llm = self.make_llm(self.store.provider(self.conversation_id))
         for attempt in range(MAX_RETRIES + 1):
             try:
-                return llm.complete(SYSTEM_PROMPT, self.messages(), self.tools)
+                return llm.complete(SYSTEM_PROMPT, self.messages(), self.toolbox.definitions)
             except ProviderError as exc:
                 if not exc.retryable or attempt == MAX_RETRIES:
                     raise
@@ -117,20 +108,20 @@ class Agent:
             return self.post(call)
         if call["name"] != "read":
             return tool_message(call, "error", {"reason": f"Unknown tool {call['name']}."})
-        result = self.mcp.call("read", call["arguments"])
+        result = self.toolbox.call("read", call["arguments"])
         return tool_message(call, "completed" if result["status"] == "ok" else "refused", result)
 
     def post(self, call: ToolCall) -> Message:
         """Check, wait for the clerk, then post. The model never approves."""
         invoice_id = call["arguments"].get("invoice_id", "")
-        proposal = self.mcp.call("propose_post", {"invoice_id": invoice_id})
+        proposal = self.toolbox.call("propose_post", {"invoice_id": invoice_id})
         if proposal["status"] != "ok":
             return tool_message(call, "refused", {"posted": False, "reason": proposal["message"]})
         approved, reason = self.wait_for_clerk(proposal["proposal"])
         if not approved:
             return tool_message(call, "declined", {"posted": False, "declined_by_clerk": True, "reason": reason})
         with ignoring_ctrl_c():
-            result = self.mcp.call("execute_post", {
+            result = self.toolbox.call("execute_post", {
                 "invoice_id": invoice_id, "reference": f"fourx:{self.conversation_id}:{call['call_id']}",
                 "approved_proposal": proposal["proposal"]})
         if result["status"] != "ok":
@@ -172,7 +163,7 @@ class Agent:
 
     def switch(self, model: str) -> str:
         """The clerk's switch, through the switch_model tool. Returns the tool's message."""
-        return self.mcp.call("switch_model", {"conversation_id": self.conversation_id, "model": model})["message"]
+        return self.toolbox.call("switch_model", {"conversation_id": self.conversation_id, "model": model})["message"]
 
 
 def describe(proposal: dict[str, Any]) -> str:

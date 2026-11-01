@@ -33,16 +33,15 @@ The brief says to keep it small and to explain every line, so the build is trimm
      AND). It also reads invoices and vendors by ID or name.
   3. **Post an invoice** with the post tool, after code checks and human approval.
 - The model sees two tools: `read(source, mode, id, filters)` over invoices, vendors and the
-  ledger (last/all/filter) and `post(invoice_id)`. `switch_model(model)` is the third MCP tool, run only
+  ledger (last/all/filter) and `post(invoice_id)`. `switch_model(model)` is the third tool, run only
   when the clerk asks (typing `switch model`), never offered to the model. Typing exactly `switch model` makes the CLI ask
   `gemini, groq or openai?` and compare the answer, so a model out of quota cannot block a switch.
-  The tools live in an MCP server (`mcp_server.py`, official `mcp` Python SDK, stdio, started
-  by the CLI). The runner is the MCP client: it lists the server's tools, gives the model
-  their schemas, and sends each tool call over MCP. The server exposes `read`, and `post`
-  split into `propose_post` (runs `check_posting`, returns the exact proposal) and `execute_post`
-  (re-checks under the lock, then `ledger.post`). The model sees only `read` and `post`; the
-  runner turns `post` into `propose_post`, and calls `execute_post` itself, only after the
-  clerk's `/approve`. Approval, saving and recovery stay in the runner, never in the server.
+  The tools are plain Python methods in `agent_tools.py` (class `AgentTools`), called directly
+  by the runner in the same process; there is no MCP server or client. The model sees only
+  `read` and `post`. `post` is split in two methods, `propose_post` (runs `check_posting`,
+  returns the exact proposal) and `execute_post` (re-checks under the lock, then `ledger.post`).
+  The runner calls `propose_post` for the model's `post`, and `execute_post` itself, only after
+  the clerk's `/approve`. Approval, saving and recovery stay in the runner.
   `/model` is gone. Default provider is OpenAI.
 - Conversation choice is a startup question. Each conversation has one status, `open` or `completed`.
   When the CLI opens, the system looks in SQLite for an incomplete (`open`) conversation. If one
@@ -100,7 +99,7 @@ or invent invoice fields, account mappings, or tax rules.
 ## 2. End-to-end flow
 
 One diagram: how the CLI reaches the main agent, and how the main agent reaches its three
-tools through the MCP server. Sections 3 onward are the original design notes; where they
+tools. Sections 3 onward are the original design notes; where they
 differ from this diagram or the decisions above, the diagram and decisions win.
 
 ```mermaid
@@ -117,7 +116,7 @@ flowchart TD
     subgraph Loop["Conversation loop - repeats until the clerk quits"]
         Prompt["you> prompt: clerk types a request"] --> Agent[["Main agent (runner)"]]
         Agent <--> Model{{Gemini / Groq / OpenAI}}
-        Agent <-->|"call a tool, get its result"| MCP[[MCP server]]
+        Agent <-->|"call a tool, get its result"| MCP[[Tools: plain Python methods]]
         Agent -->|"checks the result, then answers"| Answer["Answer to the clerk, plus: next invoice, or anything else?"]
         Answer -->|"loop again: wait for the next message"| Prompt
     end
@@ -143,12 +142,12 @@ flowchart TD
     Msg["Clerk sends a message"] --> Save["Save it, then send the history to the model"]
     Save --> Model{"Model replies with: an answer, or a tool call?"}
     Model -->|"Answer"| Show["Show the answer to the clerk"] --> Done([Wait for the next message])
-    Model -->|"read or switch_model"| Run["Run the MCP tool, save the result"] --> Model
-    Model -->|"post"| Propose["MCP propose_post: run the checks"]
+    Model -->|"read or switch_model"| Run["Run the tool, save the result"] --> Model
+    Model -->|"post"| Propose["propose_post: run the checks"]
     Propose -->|"Refused"| Back["Save the reason as the tool result"] --> Model
     Propose -->|"Allowed"| Wait["Show the exact proposal and WAIT for the clerk"]
     Wait -->|"/decline reason"| Declined["Save: declined, with the reason"] --> Model
-    Wait -->|"/approve"| Exec["MCP execute_post: re-check, then post to the ledger"]
+    Wait -->|"/approve"| Exec["execute_post: re-check, then post to the ledger"]
     Exec --> Posted["Save the result: posted with entry ID, or refused"] --> Model
     Wait -->|"/quit"| Kept(["Exit; the proposal stays saved for the next launch"])
 ```
@@ -157,7 +156,7 @@ In words: the model keeps asking for tools until it has enough to answer. Every 
 including a refusal or a decline, goes back to the model, which then explains it to the clerk.
 Only `post` stops and waits. While it waits, other typed text just shows the proposal again.
 
-### Post tool (MCP) flow
+### Post tool flow
 
 The `post(invoice_id)` tool checks in a fixed order and stops at the first problem. Every
 refusal goes back to the model as the tool result, with the reason, so the model can explain
@@ -201,10 +200,10 @@ Notes:
   approval step is kept even though the checks alone could post, because the brief requires a
   human to approve every exact posting.
 - The approval comes only from the clerk's `/approve` or `/decline`, never from model text.
-- In the MCP server this is the `propose_post` tool (steps up to the proposal) and the
+- In `agent_tools.py` this is the `propose_post` tool (steps up to the proposal) and the
   `execute_post` tool (the re-check and `ledger.post`). The runner handles the approval in between.
 
-### Switch model (MCP) flow
+### Switch model flow
 
 The `switch_model(model)` tool changes which LLM (OpenAI, Gemini or Groq) answers in the
 current conversation. The conversation ID, the saved history and any waiting approval stay
@@ -238,7 +237,7 @@ Notes:
 - History is stored in our own format, so the new provider reads the earlier messages and tool
   results as if it had written them.
 
-### Read ledger (MCP) flow
+### Read ledger flow
 
 The `read` tool looks at the ledger without ever writing to it. For the ledger it has three
 actions: `last`, `all` and `filter`. It returns the rows it finds, or a clear "no entries
@@ -358,7 +357,7 @@ switch requests. The model requests a switch; only the harness can change state.
 Record its result and finish the outstanding tool batch before invoking the next
 provider. A provider switch preserves the same conversation and pending approval.
 While approval waits, use the direct CLI command; no extra model call is needed.
-The MCP server exposes this as its `switch_model` tool; the runner calls it only for the clerk.
+`AgentTools.switch_model` does this; the runner calls it only for the clerk.
 
 ### Durable checkpoints
 
@@ -429,8 +428,8 @@ fourX/
 │   ├── __init__.py        # existing fourx entry point
 │   ├── cli.py            # read-only inspection now; interactive controls later
 │   ├── models.py         # canonical messages, tool calls, and action snapshots
-│   ├── tools.py          # supplied data access and ledger bridge (served by the MCP server)
-│   ├── mcp_server.py     # MCP server exposing read, propose_post, execute_post
+│   ├── tools.py          # supplied data access and ledger bridge (used by agent_tools.py)
+│   ├── agent_tools.py    # the tools: read, propose_post, execute_post, switch_model
 │   ├── storage.py        # durable conversations, tool results, approvals
 │   ├── providers.py      # explicit Gemini/Groq SDK adapters
 │   ├── prompts.py        # main agent scope and tool-use instructions (future)
